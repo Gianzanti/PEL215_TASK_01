@@ -171,7 +171,7 @@ class MyRobot:
     def __init__(self) -> None:
         self.me = Robot()
         self.timestep = int(self.me.getBasicTimeStep()) * 2
-        print(f"Basic time step: {self.timestep}")
+        # print(f"Basic time step: {self.timestep}")
         # self.wheels_radius = 0.111  # m
         self.max_speed = 6.4
         self.direction = "F"
@@ -180,7 +180,7 @@ class MyRobot:
         self.default_speed = 0.5 * self.max_speed
         self.right_speed = self.default_speed
         self.left_speed = self.default_speed
-        self.safeDistance = 200.0
+        self.safeDistance = 120.0
         # self.pid_r_wall = PID(0.0022, 0.000001, 0.17, self.safeDistance)
         self.pid_r_wall = PID(0.05, 0.000001, 0.01, self.safeDistance)
         self.initMotors()
@@ -191,8 +191,8 @@ class MyRobot:
             value = item["sensor"].getValue()
             item["value"] = value
 
-        for item in self.sensors:
-            print(f"Sensor {item['name']}: {item['value']}")
+        # for item in self.sensors:
+        #     print(f"Sensor {item['name']}: {item['value']}")
 
     def applySpeed(self):
         self.front_left_motor.setVelocity(self.left_speed)
@@ -257,7 +257,7 @@ class MyRobot:
         self.applySpeed()
 
     def run(self):
-        # steps = 0
+        done = False
         while self.me.step(self.timestep) != -1:
             # self.right_speed = 2
             # self.left_speed = 2
@@ -276,15 +276,22 @@ class MyRobot:
             # 1mts da parede: 820 796 = 808 - 1024 = 216
             # 0.5mts da parede: 909 905 = 907 - 1024 = 117
 
-            self.readSensors()
-            self.faceWall()
+            # self.readSensors()
+            # done = self.faceWall()
+            while (not done) and self.me.step(self.timestep) != -1:
+                self.readSensors()
+                done = self.faceWall()
 
+            print("Done")
             # test = self.detectWalls()
 
-            # # move forward
-            # self.right_speed = self.default_speed
-            # self.left_speed = self.default_speed
-            # self.applySpeed()
+            # move forward
+            self.readSensors()
+            self.correctAlignment()
+            self.deviate()
+            self.forward(0.1)
+
+            # correct alignment
 
             # # detect walls
             # right_error = self.detectWallRight()
@@ -341,30 +348,19 @@ class MyRobot:
         return left_median + right_median
 
     def detectWallRight(self):
-        print(
-            f"Sensor values: {self.front_sensor_values[6]} | {self.front_sensor_values[7]}"
-        )
-        max_sensor = max(
-            self.front_sensor_values[6],
-            self.front_sensor_values[7],
-            # self.back_sensor_values[0],
-        )
         # max_sensor = max(
-        #     self.front_sensor_values[6],
-        #     self.front_sensor_values[7],
-        #     self.back_sensor_values[0],
-        #     self.back_sensor_values[1],
+        #     self.sensors[6]["value"],
+        #     self.sensors[7]["value"],
         # )
-        # max_sensor = self.front_sensor_values[7]
-        # print(f"Max sensor: {max_sensor}")
-
+        max_sensor = (self.sensors[7]["value"] + self.sensors[8]["value"]) / 2
+        print(f'Sensor values: {self.sensors[7]["value"]} | {self.sensors[8]["value"]}')
         currentDistanceFromWall = 1024 - max_sensor
         print(f"Current distance from right wall: {currentDistanceFromWall}")
 
-        error = self.pid_r_wall.update(currentDistanceFromWall)
-        # print(f"Error: {error}")
+        # error = self.pid_r_wall.update(currentDistanceFromWall)
+        # # print(f"Error: {error}")
 
-        return error
+        return currentDistanceFromWall
 
     def detectWallLeft(self):
         max_sensor = max(
@@ -388,20 +384,7 @@ class MyRobot:
         print(f"Current distance from front wall: {currentDistanceFromWall}")
         return currentDistanceFromWall
 
-    def faceWall(self):
-        # check lateral alignment
-        right_alignment = self.sensors[7]["value"] - self.sensors[8]["value"]
-        print(f"Right alignment: {right_alignment}")
-        left_alignment = self.sensors[0]["value"] - self.sensors[15]["value"]
-        print(f"Left alignment: {left_alignment}")
-
-        if (abs(right_alignment) < 30 and self.sensors[7]["value"] > 0) or (
-            abs(left_alignment) < 30 and self.sensors[0]["value"] > 0
-        ):
-            print("Lateral aligned...")
-            self.forward(0.1)
-            return
-
+    def faceWallOld(self):
         # check front alignment
         front_alignment = self.sensors[3]["value"] - self.sensors[4]["value"]
         print(f"Front alignment: {front_alignment}")
@@ -426,40 +409,177 @@ class MyRobot:
 
             return
 
-        # check where to turn to align
-        left_side = (
-            self.sensors[0]["value"]
-            + self.sensors[1]["value"]
-            + self.sensors[2]["value"]
-            + self.sensors[3]["value"]
-        ) / 4
+        # check lateral alignment
+        right_alignment = self.sensors[7]["value"] - self.sensors[8]["value"]
+        print(f"Right alignment: {right_alignment}")
+        left_alignment = self.sensors[0]["value"] - self.sensors[15]["value"]
+        print(f"Left alignment: {left_alignment}")
 
-        right_side = (
-            self.sensors[4]["value"]
-            + self.sensors[5]["value"]
-            + self.sensors[6]["value"]
-            + self.sensors[7]["value"]
-        ) / 4
+        if (abs(right_alignment) < 30 and self.sensors[7]["value"] > 0) or (
+            abs(left_alignment) < 30 and self.sensors[0]["value"] > 0
+        ):
+            print("Lateral aligned...")
+            # check wall distance
+            rightDistance = self.detectWallRight()
+            if rightDistance > 150:
+                self.rotate(-pi / 70)
+            else:
+                self.forward(0.05)
+            return
+
+        # check where to turn to align
+        left_side = max(
+            self.sensors[0]["value"],
+            self.sensors[1]["value"],
+            self.sensors[2]["value"],
+            self.sensors[3]["value"],
+        )
+
+        right_side = max(
+            self.sensors[4]["value"],
+            self.sensors[5]["value"],
+            self.sensors[6]["value"],
+            self.sensors[7]["value"],
+        )
 
         print(f"Right side: {right_side}")
         print(f"Left side: {left_side}")
 
-        if right_side > left_side:
+        if right_side > left_side and right_side > 600:
             print("Turning right...")
             self.rotate(-pi / 70)
             return
 
-        if right_side < left_side:
+        if right_side < left_side and left_side > 600:
             print("Turning left...")
             self.rotate(pi / 70)
             return
 
+        self.forward(0.1)
+
+    def faceWall(self):
+        # check front alignment
+        front_alignment = self.sensors[3]["value"] - self.sensors[4]["value"]
+        print(f"Front alignment: {front_alignment}")
+
+        if abs(front_alignment) < 10 and self.sensors[3]["value"] > 0:
+            print("Front aligned...")
+
+            currentDistanceFromWall = (
+                1024 - (self.sensors[3]["value"] + self.sensors[4]["value"]) / 2
+            )
+            print(f"Current distance from front wall: {currentDistanceFromWall}")
+
+            # 2mts da parede: 585 588 = 586,5 - 1024 = 437,5
+            # 1.5mts da parede: 699 699 = 699 - 1024 = 325
+            # 1mts da parede: 820 796 = 808 - 1024 = 216
+            # 0.5mts da parede: 909 905 = 907 - 1024 = 117
+
+            if currentDistanceFromWall < 120:
+                self.rotate(pi / 2)
+                return True
+            else:
+                self.forward((currentDistanceFromWall - 120) / (2 * 110))
+
+            return False
+
+        # # check lateral alignment
+        # right_alignment = self.sensors[7]["value"] - self.sensors[8]["value"]
+        # print(f"Right alignment: {right_alignment}")
+        # left_alignment = self.sensors[0]["value"] - self.sensors[15]["value"]
+        # print(f"Left alignment: {left_alignment}")
+
+        # # if (abs(right_alignment) < 30 and self.sensors[7]["value"] > 0) or (
+        # #     abs(left_alignment) < 30 and self.sensors[0]["value"] > 0
+        # # ):
+        # #     print("Lateral aligned...")
+        # #     # check wall distance
+        # #     # rightDistance = self.detectWallRight()
+        # #     # if rightDistance > 150:
+        # #     #     self.rotate(-pi / 70)
+        # #     # else:
+        # #     #     self.forward(0.05)
+        # #     # return
+        # #     return False
+
+        # else:
+        # check where to turn to align
+        left_side = max(
+            self.sensors[0]["value"],
+            self.sensors[1]["value"],
+            self.sensors[2]["value"],
+            self.sensors[3]["value"],
+        )
+
+        right_side = max(
+            self.sensors[4]["value"],
+            self.sensors[5]["value"],
+            self.sensors[6]["value"],
+            self.sensors[7]["value"],
+        )
+
+        print(f"Right side: {right_side}")
+        print(f"Left side: {left_side}")
+
+        if right_side > left_side:  # and right_side > 600:
+            print("Turning right...")
+            self.rotate(-pi / 70)
+            return False
+
+        if right_side < left_side:  # and left_side > 600:
+            print("Turning left...")
+            self.rotate(pi / 70)
+            return False
+
+        # self.forward(0.1)
+        return False
+
+    def correctAlignment(self):
+        # check lateral alignment
+        right_alignment = self.sensors[7]["value"] - self.sensors[8]["value"]
+        print(f"Right alignment: {right_alignment}")
+        left_alignment = self.sensors[0]["value"] - self.sensors[15]["value"]
+        print(f"Left alignment: {left_alignment}")
+
+        if (abs(right_alignment) < 30 and self.sensors[7]["value"] > 0) or (
+            abs(left_alignment) < 30 and self.sensors[0]["value"] > 0
+        ):
+            print("Lateral aligned...")
+            # check wall distance
+            rightDistance = self.detectWallRight()
+            if rightDistance > 150:
+                self.rotate(-pi / 70)
+            elif rightDistance < 130:
+                self.rotate(pi / 70)
+            # else:
+            #     self.forward(0.05)
+            return
+
+    def deviate(self):
+        left_side = max(
+            self.sensors[2]["value"],
+            self.sensors[3]["value"],
+        )
+
+        right_side = max(
+            self.sensors[4]["value"],
+            self.sensors[5]["value"],
+        )
+
+        print(f"Right side: {right_side}")
+        print(f"Left side: {left_side}")
+
+        if right_side > left_side:  # and right_side > 600:
+            print("Turning left...")
+            self.rotate(pi / 70)
+
+        if right_side < left_side:  # and left_side > 600:
+            print("Turning right...")
+            self.rotate(-pi / 70)
+
 
 def main():
     robot = MyRobot()
-    # robot.rotate(pi / 9)
-    # robot.delay(100)
-    # robot.rotate(-pi / 10)
     robot.run()
 
 
