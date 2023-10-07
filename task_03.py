@@ -1,8 +1,14 @@
-from math import pi
-import time
+import math
 from controller import Robot, Motor, DistanceSensor
 
 INF = float("+inf")
+
+
+def max_ignore_nan(arr):
+    content = list(filter(lambda x: not math.isnan(x), arr))
+    if (len(content)) == 0:
+        return None
+    return max(content)
 
 
 class PID:
@@ -26,14 +32,31 @@ class PID:
         derivative = self.Kd * self.error_diff
         pid = proportional + integral + derivative
 
-        print(f"PID raw: {self.error} | {self.error_sum} | {self.error_diff}")
-        print(f"PID splited: {proportional} | {integral} | {derivative}")
-        print(f"PID: {pid}")
+        # print(f"PID raw: {self.error} | {self.error_sum} | {self.error_diff}")
+        # print(f"PID splited: {proportional} | {integral} | {derivative}")
+        # print(f"PID: {pid}")
 
         return pid
 
 
 class MyRobot:
+    def __init__(self) -> None:
+        self.me = Robot()
+        self.timestep = int(self.me.getBasicTimeStep()) * 2
+        self.max_speed = 6.4  # => 0.7 m/s
+        self.default_speed = 0.5 * self.max_speed
+        self.right_speed = self.default_speed
+        self.left_speed = self.default_speed
+        self.r_Distance = 1
+        self.f_Distance = 0
+        self.l_Distace = 3
+        # self.pid_r_wall = PID(0.0022, 0.000001, 0.17, self.safeDistance)
+        self.pid_r_wall = PID(0.5, 0, 0.1, self.r_Distance)
+        # self.pid_f_wall = PID(0.0022, 0.000001, 0.17, self.f_Distance)
+        self.pid_l_wall = PID(0.1, 0, 0.01, self.l_Distace)
+        self.initMotors()
+        self.initSensors()
+
     def initMotors(self):
         self.front_left_motor = self.me.getDevice("front left wheel")
         self.front_right_motor = self.me.getDevice("front right wheel")
@@ -168,31 +191,19 @@ class MyRobot:
         for item in self.sensors:
             item["sensor"].enable(self.timestep)
 
-    def __init__(self) -> None:
-        self.me = Robot()
-        self.timestep = int(self.me.getBasicTimeStep()) * 2
-        # print(f"Basic time step: {self.timestep}")
-        # self.wheels_radius = 0.111  # m
-        self.max_speed = 6.4
-        self.direction = "F"
-        self.right_direction = "F"
-        self.left_direction = "F"
-        self.default_speed = 0.5 * self.max_speed
-        self.right_speed = self.default_speed
-        self.left_speed = self.default_speed
-        self.safeDistance = 120.0
-        # self.pid_r_wall = PID(0.0022, 0.000001, 0.17, self.safeDistance)
-        self.pid_r_wall = PID(0.05, 0.000001, 0.01, self.safeDistance)
-        self.initMotors()
-        self.initSensors()
-
     def readSensors(self):
         for item in self.sensors:
-            value = item["sensor"].getValue()
-            item["value"] = value
+            # item["value"] = item["sensor"].getValue()
+            distance = (
+                -4.9e-03 * item["sensor"].getValue() + 5.44
+                if item["sensor"].getValue() != 0
+                else float("NaN")
+            )
+            item["value"] = distance
+            if not math.isnan(distance):
+                print(f"{item['name']}: {item['value']:.2f} ", end="")
 
-        # for item in self.sensors:
-        #     print(f"Sensor {item['name']}: {item['value']}")
+        print("")
 
     def applySpeed(self):
         self.front_left_motor.setVelocity(self.left_speed)
@@ -202,23 +213,15 @@ class MyRobot:
 
     def delay(self, ms):
         targetTime = ms / 1000.0
-        timeLeft = 0.00
-
         initTime = self.me.getTime()
-        print(f"Init time: {initTime}")
-
-        while timeLeft < targetTime:
-            currentTime = self.me.getTime()
-            print(f"Current time: {currentTime}")
-            timeLeft = currentTime - initTime
-            print(f"Time left: {timeLeft}")
+        while self.me.getTime() - initTime < targetTime:
             self.me.step(self.timestep)
 
     def rotate(self, angle):
         # to rotate 90 degrees needs 64 steps
         # 1. calculate the number of steps needed to rotate
         print(f"Angle: {angle}")
-        steps = int(abs(angle) * 64 / (pi / 2))
+        steps = int(abs(angle) * 64 / (math.pi / 2))
         print(f"Steps: {steps}")
         velocity = 1
         if angle < 0:
@@ -230,6 +233,31 @@ class MyRobot:
         while currentStep < steps:
             self.me.step(self.timestep)
             currentStep += 1
+
+        self.right_speed = 0
+        self.left_speed = 0
+        self.applySpeed()
+
+    def moveStraight(self, distance):
+        speedFactor = 0.5
+        self.default_speed = speedFactor * self.max_speed  # 0.7 m/s
+        self.default_speed = self.default_speed if distance > 0 else -self.default_speed
+        self.right_speed = self.default_speed
+        self.left_speed = self.default_speed
+
+        linear_velocity = 0.7 * speedFactor
+
+        timeRequired = abs(distance) / linear_velocity
+        # print(f"Time required: {timeRequired}")
+
+        timeSteps = int(timeRequired / (self.timestep / 1000.0))
+        # print(f"Time steps: {timeSteps}")
+        self.applySpeed()
+
+        while timeSteps > 0:
+            timeSteps -= 1
+            # print(f"Steps left: {timeSteps}")
+            self.me.step(self.timestep)
 
         self.right_speed = 0
         self.left_speed = 0
@@ -256,9 +284,137 @@ class MyRobot:
         self.left_speed = 0
         self.applySpeed()
 
+    # sensor value - distance
+    # 7.2 ->  5.4m
+    # 27.8 ->  5.3m
+    # 48.1 ->  5.2m
+    # 68.7 ->  5.1m
+    # 89.3 -> 5m
+    # 109.9 ->  4.9m
+    # 130.5 ->  4.8m
+    # 150.5 ->  4.7m
+    # 171.1 ->  4.6m
+    # 190.5 ->  4.5m
+    # 212.1 ->  4.4m
+    # 415 ->  3.4m
+    # 620 ->  2.4m
+    # 825 ->  1.4m
+    # 845 ->  1.3m
+    # 865 ->  1.2m
+    # 885 ->  1.1m
+    # 905 -> 1m
+    # 925 ->  0.9m
+    # 945 ->  0.8m
+    # 965 ->  0.7m
+    # 985 ->  0.6m
+
+    # linearization equation for this table
+    # y = -4,9E-03*x + 5,44
+
+    def followRightWall(self):
+        distance = max_ignore_nan(
+            [
+                self.sensors[6]["value"],
+                self.sensors[7]["value"],
+            ]
+        )
+
+        # if distance == None:
+        #     distance = max_ignore_nan(
+        #         [
+        #             self.sensors[5]["value"],
+        #             self.sensors[8]["value"],
+        #         ]
+        #     )
+
+        # print(f"Right Distance: {distance}")
+        if distance != None:
+            # distance = -4.9e-03 * distance + 5.44
+            print(f"Right Distance: {distance}m")
+            return distance
+        else:
+            print(f"Right Distance > 5.5m")
+            return None
+
+    def avoidFrontWall(self):
+        distance = max_ignore_nan(
+            [
+                self.sensors[2]["value"],
+                self.sensors[3]["value"],
+                self.sensors[4]["value"],
+                self.sensors[5]["value"],
+            ]
+        )
+        # print(f"Right Distance: {distance}")
+        if distance != None:
+            # distance = -4.9e-03 * distance + 5.44
+            print(f"Front Distance: {distance}m")
+            return distance
+        else:
+            print(f"Front Distance > 5.5m")
+            return None
+
+    def avoidLeftWall(self):
+        distance = max_ignore_nan(
+            [
+                self.sensors[0]["value"],
+                self.sensors[1]["value"],
+            ]
+        )
+        # print(f"Right Distance: {distance}")
+        if distance != None:
+            # distance = -4.9e-03 * distance + 5.44
+            print(f"Left Distance: {distance}m")
+            return distance
+        else:
+            print(f"Left Distance > 5.5m")
+            return None
+
     def run(self):
-        done = False
         while self.me.step(self.timestep) != -1:
+            self.readSensors()
+
+            r_dist = self.followRightWall()
+            l_dist = self.avoidLeftWall()
+            if r_dist != None:
+                error = self.pid_r_wall.update(r_dist)
+                print(f"Right Error: {error}")
+                error = 0.5 + error
+                error = 0.1 if (error < 0.1) else error
+                error = 1 if (error > 1) else error
+                self.right_speed = error * self.max_speed
+                print(f"Right Speed: {self.right_speed}")
+            elif l_dist != None and l_dist < 1.2:
+                error = self.pid_l_wall.update(l_dist)
+                print(f"Left Error: {error}")
+                error = 0.5 + error
+                error = 0.1 if (error < 0.1) else error
+                error = 1 if (error > 1) else error
+                self.right_speed = -error * self.max_speed
+                print(f"Right Speed: {self.right_speed}")
+            else:
+                self.right_speed = self.default_speed
+
+            f_dist = self.avoidFrontWall()
+            if f_dist != None and f_dist < 1:
+                self.rotate(math.pi / 6)
+
+            if (
+                (r_dist == None)
+                and (f_dist == None)
+                and (l_dist == None or l_dist > 1.5)
+            ):
+                self.right_speed = 0.4 * self.max_speed
+
+            self.left_speed = self.default_speed
+            self.applySpeed()
+
+            # if not done:
+            #     self.moveStraight(4)
+            #     self.delay(500)
+            #     self.moveStraight(-4)
+            #     done = True
+
             # self.right_speed = 2
             # self.left_speed = 2
             # steps += 1
@@ -278,18 +434,18 @@ class MyRobot:
 
             # self.readSensors()
             # done = self.faceWall()
-            while (not done) and self.me.step(self.timestep) != -1:
-                self.readSensors()
-                done = self.faceWall()
+            # while (not done) and self.me.step(self.timestep) != -1:
+            #     self.readSensors()
+            #     done = self.faceWall()
 
-            print("Done")
-            # test = self.detectWalls()
+            # print("Done")
+            # # test = self.detectWalls()
 
-            # move forward
-            self.readSensors()
-            self.correctAlignment()
-            self.deviate()
-            self.forward(0.1)
+            # # move forward
+            # self.readSensors()
+            # self.correctAlignment()
+            # self.deviate()
+            # self.forward(0.1)
 
             # correct alignment
 
@@ -302,7 +458,7 @@ class MyRobot:
 
             # if front_obstacle < 650:
             #     print("Rotating ******************************************************")
-            #     self.rotate(pi / 6)
+            #     self.rotate(math.pi / 6)
             # else:
             #     self.left_speed = self.default_speed
             #     self.right_speed = self.default_speed + right_error
@@ -403,7 +559,7 @@ class MyRobot:
             # 0.5mts da parede: 909 905 = 907 - 1024 = 117
 
             if currentDistanceFromWall < 120:
-                self.rotate(pi / 2)
+                self.rotate(math.pi / 2)
             else:
                 self.forward((currentDistanceFromWall - 120) / (2 * 110))
 
@@ -422,7 +578,7 @@ class MyRobot:
             # check wall distance
             rightDistance = self.detectWallRight()
             if rightDistance > 150:
-                self.rotate(-pi / 70)
+                self.rotate(-math.pi / 70)
             else:
                 self.forward(0.05)
             return
@@ -447,12 +603,12 @@ class MyRobot:
 
         if right_side > left_side and right_side > 600:
             print("Turning right...")
-            self.rotate(-pi / 70)
+            self.rotate(-math.pi / 70)
             return
 
         if right_side < left_side and left_side > 600:
             print("Turning left...")
-            self.rotate(pi / 70)
+            self.rotate(math.pi / 70)
             return
 
         self.forward(0.1)
@@ -476,7 +632,7 @@ class MyRobot:
             # 0.5mts da parede: 909 905 = 907 - 1024 = 117
 
             if currentDistanceFromWall < 120:
-                self.rotate(pi / 2)
+                self.rotate(math.pi / 2)
                 return True
             else:
                 self.forward((currentDistanceFromWall - 120) / (2 * 110))
@@ -496,7 +652,7 @@ class MyRobot:
         # #     # check wall distance
         # #     # rightDistance = self.detectWallRight()
         # #     # if rightDistance > 150:
-        # #     #     self.rotate(-pi / 70)
+        # #     #     self.rotate(-math.pi / 70)
         # #     # else:
         # #     #     self.forward(0.05)
         # #     # return
@@ -523,12 +679,12 @@ class MyRobot:
 
         if right_side > left_side:  # and right_side > 600:
             print("Turning right...")
-            self.rotate(-pi / 70)
+            self.rotate(-math.pi / 70)
             return False
 
         if right_side < left_side:  # and left_side > 600:
             print("Turning left...")
-            self.rotate(pi / 70)
+            self.rotate(math.pi / 70)
             return False
 
         # self.forward(0.1)
@@ -548,9 +704,9 @@ class MyRobot:
             # check wall distance
             rightDistance = self.detectWallRight()
             if rightDistance > 150:
-                self.rotate(-pi / 70)
+                self.rotate(-math.pi / 70)
             elif rightDistance < 130:
-                self.rotate(pi / 70)
+                self.rotate(math.pi / 70)
             # else:
             #     self.forward(0.05)
             return
@@ -571,11 +727,11 @@ class MyRobot:
 
         if right_side > left_side:  # and right_side > 600:
             print("Turning left...")
-            self.rotate(pi / 70)
+            self.rotate(math.pi / 70)
 
         if right_side < left_side:  # and left_side > 600:
             print("Turning right...")
-            self.rotate(-pi / 70)
+            self.rotate(-math.pi / 70)
 
 
 def main():
