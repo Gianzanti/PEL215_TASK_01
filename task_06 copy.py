@@ -18,28 +18,39 @@ class MyRobot:
         self.me = Robot()
         self.timestep = int(self.me.getBasicTimeStep()) * 2
         self.max_speed = 6.4  # => 0.7 m/s
-        self.default_speed = 0.3 * self.max_speed
-        self.right_speed = self.default_speed
-        self.left_speed = self.default_speed
+        self.regular_speed = 5  # => 0.5 m/s
+        self.speed_factor = 0.5
+        self.default_speed = self.speed_factor * self.regular_speed
 
-        self.r_Distance = 1.0
-        # self.control_rightDistance = PID(
-        #     Kp=2,
-        #     Ki=0,
-        #     Kd=0.1,
-        #     outMax=0.7,
-        #     outMin=-0.29,
-        #     lim_int_min=-5,
-        #     lim_int_max=+5,
-        # )
+        self.r_Distance = 1.2
+
+        Ku = 0.11
+        # 4210 - 3650 = 560
+        Tu = 560 * self.timestep / 1000
+
+        # self.Kp = 0.15
+        self.Kp = 0.60 * Ku
+        self.Ki = 2 * self.Kp / Tu
+        self.Kd = self.Kp * Tu / 8
+
+        # self.Kp = 0.12
+        # self.Ki = 0.0
+        # self.Kd = 0.0
+
+        print(f"Kp: {self.Kp}")
+        print(f"Ki: {self.Ki}")
+        print(f"Kd: {self.Kd}")
+
         self.control_rightDistance = PID(
-            Kp=1.0,
-            Ki=0.0,
-            Kd=0.0,
-            outMax=0.7,
-            outMin=-0.29,
-            lim_int_min=-4.5,
-            lim_int_max=+4.5,
+            Kp=self.Kp,
+            Ki=self.Ki,
+            Kd=self.Kd,
+            outMax=self.speed_factor,
+            outMin=-self.speed_factor,
+            lim_int_min=-self.max_speed,
+            lim_int_max=self.max_speed,
+            T=self.timestep / 1000,
+            τ=1 / (10 * self.timestep / 1000),
         )
 
         self.initMotors()
@@ -135,6 +146,22 @@ class MyRobot:
                 "value": 0,
                 "meters": float("NaN"),
             },
+            {
+                "name": "so9",
+                "sensor": self.me.getDevice("so9"),
+                "type": "back",
+                "position": 180,
+                "value": 0,
+                "meters": float("NaN"),
+            },
+            # {
+            #     "name": "so10",
+            #     "sensor": self.me.getDevice("so10"),
+            #     "type": "back",
+            #     "position": 180,
+            #     "value": 0,
+            #     "meters": float("NaN"),
+            # },
         ]
         for item in self.sensors:
             item["sensor"].enable(self.timestep)
@@ -143,11 +170,11 @@ class MyRobot:
         for item in self.sensors:
             item["value"] = item["sensor"].getValue()
             distance = (
-                -4.9e-03 * item["sensor"].getValue() + 5.44
+                -5e-03 * item["sensor"].getValue() + 5.0
                 if item["sensor"].getValue() != 0
                 else float("NaN")
             )
-            item["meters"] = distance
+            item["meters"] = round(distance, 3)
             # if not math.isnan(distance):
             #     print(
             #         f"{item['name']}: {item['value']:.2f} {item['meters']:.2f} ", end=""
@@ -156,6 +183,8 @@ class MyRobot:
         # print("")
 
     def applySpeed(self):
+        # print(f"Left Speed: {self.left_speed}")
+        # print(f"Right Speed: {self.right_speed}")
         self.front_left_motor.setVelocity(self.left_speed)
         self.back_left_motor.setVelocity(self.left_speed)
         self.front_right_motor.setVelocity(self.right_speed)
@@ -183,17 +212,28 @@ class MyRobot:
         self.applySpeed()
 
     def checkFrontWall(self):
-        distance = max_ignore_nan(
+        distanceA = max_ignore_nan(
             [
                 self.sensors[3]["meters"],
                 self.sensors[4]["meters"],
             ]
         )
-        if distance != None:
-            print(f"Front Distance: {distance}m")
+
+        distanceB = max_ignore_nan(
+            [
+                self.sensors[5]["meters"],
+            ]
+        )
+
+        if distanceA != None:
+            distance = distanceA * 1.1
+            print(f"Main Front Distance: {distance} m")
+            return distance
+        elif distanceB != None:
+            distance = distanceB * 2
+            print(f"Auxiliar Front Distance: {distance} m")
             return distance
         else:
-            # print(f"Front Distance > 5.5m")
             return None
 
     def faceWall(self):
@@ -344,42 +384,163 @@ class MyRobot:
         # print(f"Error: {error}")
         return error
 
+    def getRightDistance(self):
+        sensorA = max_ignore_nan(
+            [
+                self.sensors[6]["meters"],
+                self.sensors[7]["meters"],
+            ]
+        )
+
+        sensorB = max_ignore_nan(
+            [
+                # self.sensors[4]["meters"],
+                self.sensors[5]["meters"],
+                self.sensors[8]["meters"],
+                self.sensors[9]["meters"],
+                # self.sensors[10]["meters"],
+            ]
+        )
+
+        if sensorA != None:
+            return sensorA
+        elif sensorB != None:
+            return sensorB
+        else:
+            return 3.0
+
+    def avoidFrontObstacle(self, distance, angle=30):
+        mainLeftFront = (
+            self.sensors[3]["meters"] * 1.1
+            if not math.isnan(self.sensors[3]["meters"])
+            else None
+        )
+        auxLeftFront = (
+            self.sensors[2]["meters"] * 1.4
+            if not math.isnan(self.sensors[2]["meters"])
+            else None
+        )
+
+        mainRightFront = (
+            self.sensors[4]["meters"] * 1.1
+            if not math.isnan(self.sensors[4]["meters"])
+            else None
+        )
+        auxRightFront = (
+            self.sensors[5]["meters"] * 1.4
+            if not math.isnan(self.sensors[5]["meters"])
+            else None
+        )
+
+        if mainLeftFront != None and mainRightFront != None:
+            if mainLeftFront < distance or mainRightFront < distance:
+                diff = mainLeftFront - mainRightFront
+                print(f"Diff: {diff}")
+                if diff > 0.5:
+                    print(f"Main Front Left Distance: {mainLeftFront} m")
+                    return -angle
+                else:
+                    print(f"Main Front Right Distance: {mainRightFront} m")
+                    return angle
+
+        elif mainLeftFront != None and mainLeftFront < distance:
+            print(f"Main Front Left Distance: {mainLeftFront} m")
+            return -angle
+
+        elif mainRightFront != None and mainRightFront < distance:
+            print(f"Main Front Right Distance: {mainRightFront} m")
+            return angle
+
+        elif auxLeftFront != None and auxRightFront != None:
+            if auxLeftFront < distance or auxRightFront < distance:
+                diff = auxLeftFront - auxRightFront
+                if diff > 0.5:
+                    print(f"Aux Front Left Distance: {auxLeftFront} m")
+                    return -angle
+                else:
+                    print(f"Aux Front Right Distance: {auxRightFront} m")
+                    return angle
+
+        elif auxLeftFront != None and auxLeftFront < distance:
+            print(f"Aux Front Left Distance: {auxLeftFront} m")
+            return -angle
+
+        elif auxRightFront != None and auxRightFront < distance:
+            print(f"Aux Front Right Distance: {auxRightFront} m")
+            return angle
+
+        else:
+            print("No front obstacle detected")
+            return None
+
     def run(self):
-        # state = "get_front_wall"
-        state = "finetune"
+        state = "get_front_wall"
+        # state = "finetune"
+        # state = "check sensors"
+        # state = "control"
 
-        NUMBER_OF_STEPS = 1000
-        setPoint = np.zeros(NUMBER_OF_STEPS)
-        right_error = np.zeros(NUMBER_OF_STEPS)
-        right_speed = np.zeros(NUMBER_OF_STEPS)
-        front_obstacle = np.zeros(NUMBER_OF_STEPS)
+        NUMBER_OF_STEPS = 5000
+        data_setPoint = np.zeros(NUMBER_OF_STEPS)
+        data_position = np.zeros(NUMBER_OF_STEPS)
+        data_error = np.zeros(NUMBER_OF_STEPS)
+        data_rightWheelSpeed = np.zeros(NUMBER_OF_STEPS)
 
-        steps = 0
+        step = 0
         while self.me.step(self.timestep) != -1:
             self.readSensors()
 
             # match statement starts here .
             match state:
+                case "check sensors":
+                    for item in self.sensors:
+                        item["value"] = item["sensor"].getValue()
+                        distance = (
+                            -5e-03 * item["sensor"].getValue() + 5.0
+                            if item["sensor"].getValue() != 0
+                            else float("NaN")
+                        )
+                        item["meters"] = distance
+                        if not math.isnan(distance):
+                            print(
+                                f"{item['name']}: {item['value']:.2f} {item['meters']:.2f} ",
+                                end="",
+                            )
+
+                    print("")
+                    print(self.avoidFrontObstacle(0.6))
+
                 case "finetune":
-                    setPoint = 1.0
-                    self.right_speed = self.default_speed
+                    data_setPoint[step] = self.r_Distance
                     self.left_speed = self.default_speed
-                    position = self.detectWallRight(setPoint)
-                    right_error = self.detectWallRight(setPoint)
-                    front_obstacle = self.checkFrontWall()
-                    if front_obstacle != None and front_obstacle < setPoint:
-                        self.rotate(math.radians(60))
-                    else:
-                        self.right_speed = (0.3 + right_error) * self.max_speed
-                        self.right_speed = (
-                            0.5 if self.right_speed < 0.5 else self.right_speed
-                        )
-                        self.right_speed = (
-                            6 if self.right_speed > 6 else self.right_speed
-                        )
+                    data_rightWheelSpeed[step] = self.default_speed
+                    data_position[step] = self.getRightDistance()
+                    print(f"Position: {data_position[step]} m")
+                    data_error[step] = self.control_rightDistance.update(
+                        measurement=data_position[step], setPoint=data_setPoint[step]
+                    )
+                    print(f"Error: {data_error[step]}")
+
+                    data_rightWheelSpeed[step] = (
+                        self.speed_factor + data_error[step]
+                    ) * self.regular_speed
+
+                    self.right_speed = data_rightWheelSpeed[step]
                     self.applySpeed()
-                    steps += 1
-                    print(f"Steps: {steps}")
+                    step += 1
+                    print(f"Steps: {step}")
+
+                    if step == 5000:
+                        np.savez_compressed(
+                            f"./p_{str(self.Kp).replace('.','_')}.npz",
+                            setPoint=data_setPoint,
+                            position=data_position,
+                            error=data_error,
+                            rightWheelSpeed=data_rightWheelSpeed,
+                        )
+                        self.right_speed = 0
+                        self.left_speed = 0
+                        self.applySpeed()
+                        state = "end"
 
                 case "get_front_wall":
                     # print("Positioning front wall")
@@ -394,32 +555,30 @@ class MyRobot:
                 case "control":
                     # print("Controlling...")
 
+                    setPoint = self.r_Distance
+                    position = self.getRightDistance()
+                    print(f"Position: {position} m")
+                    error = self.control_rightDistance.update(
+                        measurement=position, setPoint=setPoint
+                    )
+
                     # move forward
                     self.right_speed = self.default_speed
                     self.left_speed = self.default_speed
 
-                    # detect walls
-                    right_error = self.detectWallRight()
+                    # checar a distancia e girar conforme o lado q está se aproximando menos rapido
+                    # passar a distancia a ser observada como parametro e receber o lado para virar
 
-                    front_obstacle = self.checkFrontWall()
-                    # print(f"Obstacle: {front_obstacle}")
+                    front_obstacle = self.avoidFrontObstacle(setPoint, 46)
 
-                    if front_obstacle != None and front_obstacle < 1.0:
-                        # print(
-                        #     "Rotating ******************************************************"
-                        # )
-                        self.rotate(math.radians(60))
+                    if front_obstacle != None:
+                        self.rotate(math.radians(front_obstacle))
                     else:
-                        # self.left_speed = self.default_speed
-                        # self.default_speed = 0.3 * self.max_speed
-                        self.right_speed = (0.3 + right_error) * self.max_speed
                         self.right_speed = (
-                            0.5 if self.right_speed < 0.5 else self.right_speed
-                        )
-                        self.right_speed = (
-                            6 if self.right_speed > 6 else self.right_speed
-                        )
-                        # print(f"Right Speed: {self.right_speed}")
+                            self.speed_factor + error
+                        ) * self.regular_speed
+
+                        print(f"Right Speed: {self.right_speed}")
 
                     self.applySpeed()
 
